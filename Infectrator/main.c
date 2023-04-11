@@ -247,7 +247,7 @@ int main(int argc, char** argv)
 }
 
 /*
-
+// shellcode merak edenler icin, asagida asm serisini bulabilirsiniz
 BITS 32
 
 push ebp
